@@ -1,0 +1,121 @@
+--- a/workbench/agent.py
++++ b/workbench/agent.py
+@@ -7,7 +7,7 @@
+ 
+ from openai import AsyncOpenAI
+ from .tokenizer import LMStudioTokenCounter
+-from .tool_call_adapter import extract_tool_calls
++from .tool_call_adapter import extract_tool_calls, visible_response_text, empty_response_notice
+ from .tool_guard import tool_call_fingerprint
+ from mcp import ClientSession, StdioServerParameters
+ from mcp.client.stdio import stdio_client
+@@ -770,7 +770,7 @@
+                 context_info['last_actual_completion_tokens'] = completion_value
+             msg = response.choices[0].message
+             tool_calls, text_call_detected, adapter_error = extract_tool_calls(msg, tools)
+-            assistant_msg = {'role': 'assistant', 'content': msg.content or ''}
++            assistant_msg = {'role': 'assistant', 'content': visible_response_text(msg, '')}
+             if tool_calls:
+                 assistant_msg['tool_calls'] = [{'id': tc.id, 'type': 'function', 'function': {'name': tc.function.name, 'arguments': tc.function.arguments}} for tc in tool_calls]
+             msgs.append(assistant_msg)
+@@ -779,7 +779,7 @@
+                 tool_rounds += 1
+                 continue
+             if not tool_calls:
+-                answer = msg.content or 'Модель вернула пустой ответ.'
++                answer = visible_response_text(msg, empty_response_notice(msg, 'основного ответа'))
+                 self.store.add_message(bid, 'assistant', answer, total_prompt, total_completion, usage_message_id=user_message_id)
+                 return {'answer': answer, 'usage': {'prompt_tokens': total_prompt, 'completion_tokens': total_completion, 'last_prompt_tokens': last_prompt}, 'model': model, 'pending': self.store.pending(bid), 'context': context_info, 'tool_rounds': tool_rounds, 'tool_calls': tool_calls_count, 'max_tool_calls': max_tool_calls, 'limit_reached': False}
+ 
+@@ -915,7 +915,7 @@
+                         if u:
+                             total_prompt+=int(up or 0);total_completion+=int(uc or 0)
+                             context_info['last_actual_prompt_tokens']=up;context_info['last_actual_completion_tokens']=uc
+-                        answer=final.choices[0].message.content or stop_reason
++                        answer=visible_response_text(final.choices[0].message, stop_reason)
+                     except Exception: answer=stop_reason+' Результаты предыдущего поиска сохранены в истории.'
+                 self.store.add_message(bid,'assistant',answer,total_prompt,total_completion,usage_message_id=user_message_id)
+                 return {'answer':answer,'usage':{'prompt_tokens':total_prompt,'completion_tokens':total_completion,'last_prompt_tokens':last_prompt},'model':model,'pending':self.store.pending(bid),'context':context_info,'tool_rounds':tool_rounds,'tool_calls':tool_calls_count,'max_tool_calls':max_tool_calls,'limit_reached':False,'tool_error':True}
+@@ -1039,18 +1039,18 @@
+                 msg = response.choices[0].message
+                 resume_calls, resume_text_detected, resume_adapter_error = extract_tool_calls(msg, tools)
+                 if resume_text_detected and resume_adapter_error:
+-                    msgs.append({'role':'assistant','content':msg.content or ''})
++                    msgs.append({'role':'assistant','content':visible_response_text(msg, '')})
+                     msgs.append({'role':'user','content':'[ОШИБКА ФОРМАТА ВЫЗОВА ИНСТРУМЕНТА] '+resume_adapter_error+' Исправь формат и повтори корректный вызов.'})
+                     continue
+                 if not resume_calls:
+-                    answer = msg.content or 'Модель вернула пустой ответ после продолжения.'
++                    answer = visible_response_text(msg, empty_response_notice(msg, 'ответа после продолжения'))
+                     self.store.add_message(bid, 'assistant', answer, total_prompt, total_completion,
+                                            usage_message_id=user_message_id,
+                                            metadata={'kind': f'{resume_kind}_resume', 'resume_id': resume_id})
+                     self._mark_resume(resume_kind, resume_id, 'completed')
+                     return {'resumed': True, 'answer': answer, 'tool_calls': tool_count}
+ 
+-                assistant_msg = {'role': 'assistant', 'content': msg.content or '', 'tool_calls': [
++                assistant_msg = {'role': 'assistant', 'content': visible_response_text(msg, ''), 'tool_calls': [
+                     {'id': tc.id, 'type': 'function', 'function': {'name': tc.function.name,
+                      'arguments': tc.function.arguments}} for tc in resume_calls]}
+                 msgs.append(assistant_msg)
+--- a/workbench/tool_call_adapter.py
++++ b/workbench/tool_call_adapter.py
+@@ -114,3 +114,29 @@
+     if native:
+         return list(native), False, None
+     return parse_text_tool_calls(getattr(message, "content", "") or "", tools)
++
++
++def visible_response_text(message, fallback=""):
++    """Return only user-visible assistant content, never private reasoning.
++
++    Some local OpenAI-compatible servers can finish with an empty `content`
++    while populating `reasoning_content`. Reasoning is deliberately NOT used
++    as a substitute: callers receive an explicit, safe fallback instead.
++    """
++    content = getattr(message, "content", None)
++    if isinstance(content, str) and content.strip():
++        return content
++    return fallback
++
++
++def empty_response_notice(message, stage="ответа"):
++    """Explain an empty visible response without exposing reasoning tokens."""
++    reasoning = getattr(message, "reasoning_content", None)
++    if isinstance(reasoning, str) and reasoning.strip():
++        return (
++            f"Модель завершила генерацию, но не вернула пользовательский текст ({stage}). "
++            "Текст присутствует только во внутреннем поле reasoning_content и не был "
++            "показан во избежание раскрытия внутренних рассуждений. Повтори запрос "
++            "или проверь формат ответа/шаблон модели в LM Studio."
++        )
++    return f"Модель завершила генерацию без пользовательского текста ({stage}). Повтори запрос."
+--- a/tests/test_tool_call_adapter.py
++++ b/tests/test_tool_call_adapter.py
+@@ -143,3 +143,26 @@
+     calls, detected, error = parse_text_tool_calls('<tool_call><function=sandbox_run_check>', _tools())
+     assert detected and not calls
+     assert 'незавершённый' in error
++
++
++def test_reasoning_content_is_never_used_as_user_visible_answer():
++    from workbench.tool_call_adapter import visible_response_text, empty_response_notice
++    message = SimpleNamespace(content='', reasoning_content='Внутренний текст с возможными рассуждениями', tool_calls=None)
++    assert visible_response_text(message, '') == ''
++    notice = empty_response_notice(message, 'основного ответа')
++    assert 'reasoning_content' in notice
++    assert 'Внутренний текст' not in notice
++    assert 'не был показан' in notice
++
++
++def test_regular_content_wins_even_when_reasoning_is_present():
++    from workbench.tool_call_adapter import visible_response_text
++    message = SimpleNamespace(content='Готово.', reasoning_content='private reasoning')
++    assert visible_response_text(message, 'fallback') == 'Готово.'
++
++
++def test_empty_response_without_reasoning_gets_clear_notice():
++    from workbench.tool_call_adapter import empty_response_notice
++    message = SimpleNamespace(content='', reasoning_content=None)
++    notice = empty_response_notice(message, 'основного ответа')
++    assert 'без пользовательского текста' in notice

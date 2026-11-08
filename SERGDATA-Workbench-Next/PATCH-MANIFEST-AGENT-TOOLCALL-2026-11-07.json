@@ -1,0 +1,19 @@
+{
+  "name": "SERGDATA Workbench Agent Tool-call and Scoped External Read Fix",
+  "date": "2026-11-07",
+  "files": [
+    "workbench/agent.py",
+    "workbench/tool_call_adapter.py",
+    "tests/test_tool_call_adapter.py",
+    "tests/test_explicit_registered_project_access.py",
+    "INSTALL-AGENT-TOOLCALL-AND-EXTERNAL-READ-RU.md",
+    "TEST-REPORT-AGENT-TOOLCALL-2026-11-07-RU.md"
+  ],
+  "database_migration": false,
+  "env_changes": false,
+  "approval_queue_changes": false,
+  "execution_engine_changes": false,
+  "ssh_profile_changes": false,
+  "live_lm_studio_test": false,
+  "test_summary": "236 passed; compileall OK"
+}

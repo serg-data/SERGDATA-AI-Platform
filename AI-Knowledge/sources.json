@@ -1,0 +1,16 @@
+{
+  "sources": [
+    {
+      "id": "ai-knowledge-test",
+      "name": "AI-Knowledge-Test",
+      "path": "F:\\AI-Knowledge-Test",
+      "enabled": true
+    },
+    {
+      "id": "sergdata-workbench-next",
+      "name": "SERGDATA-Workbench-Next",
+      "path": "F:\\SERGDATA-Workbench-Next",
+      "enabled": true
+    }
+  ]
+}

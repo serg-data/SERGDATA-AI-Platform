@@ -1,0 +1,90 @@
+﻿# 3x-ui v3.11.0 - Release notes
+Источник: https://github.com/MHSanaei/3x-ui/releases/tag/v3.11.0
+Тег: v3.11.0
+Дата публикации: 
+Xray-core v26.10.21, Kernel AmneziaWG, Per-Client Hosts & a Rebuilt Telegram Bot
+🔐 Security hardening — Fresh databases get a random first user, generated WireGuard/AmneziaWG configs are checked line by line, and client IPs behind a proxy can no longer be spoofed.
+⚙️ Xray-core v26.10.21 — The panel follows the new core's XDRIVE and Lua-script rules and adds the finalmask source-IP filter, Lua noise scripts and XDNS over DoH.
+🚄 Kernel AmneziaWG — An opt-in Linux kernel datapath per inbound, plus much faster uploads on the embedded datapath.
+🎯 Smarter hosts — Bind host rules to individual clients, give a host a pool of SNIs, expand CIDR ranges into random IPs, and order hosts across inbounds.
+🤖 Telegram bot rebuilt — One live screen per chat edited in place, inline search for long lists, and admin notifications routed to a forum topic.
+🔗 Cipher suites in share links — Links carry cs and pin the fingerprint so it takes effect, with presets in the editor.
+📈 Large-install performance — Cached subscription bodies, indexed token and Telegram lookups, a pooled gRPC connection and far fewer redundant database writes.
+🐳 Docker on ARM and 386 — The linux/386, arm/v6 and arm/v7 images now ship the right Xray and MTProto binaries.
+🔐 Security
+A new database's first panel user gets a random username and password printed to the server log, not a fixed default pair (1df8ab29)
+WireGuard and AmneziaWG .conf files from the subscription service, clients page, inbound modal and subscription page are built line by line and render nothing when a value holds a control character. Imported vpn:// profiles that carry wg-quick hook directives are refused, and client allowedIPs are validated on every save (0faad4f4)
+The client address behind a trusted proxy comes from the proxy end of X-Forwarded-For, and a client-supplied X-Real-IP is no longer believed. The documented Caddyfile and the docs reverse-proxy generator now overwrite it (d50c419e)
+🆕 New
+AmneziaWG inbounds can run on an opt-in Linux kernel datapath. It runs NAT-only, with host preflight checks, a bundled installer pinned to verified module commits, and accounting that survives restarts. It never goes through awg-quick, and the master refuses to push kernel mode to nodes that predate it (#6877) @YoungReckless4
+AmneziaWG clients accept a randomised persistent-keepalive range such as 15-25 in .conf and vpn:// profiles (#6881) @YoungReckless4
+The Telegram bot keeps one live screen per chat and edits it in place. The menu is grouped into Server, Clients, Traffic and Maintenance, long lists open through inline search, QR codes arrive as one sheet, and repeated notices collapse into one (#6760) @DIMFLIX
+Admin notifications can go to a forum topic with chatId:topicId (#6879) @gr219
+A client can be bound to specific host rules, so its raw, JSON and Clash subscriptions render only those hosts (#6620) @NethminaYasas
+A host can hold a pool of SNIs, picked at random per config or once per subscription fetch for the whole host group (#6923) @Pejman-Yousefi-Official
+A host address can be a CIDR range, expanded into up to 100 unique random IPs per subscription fetch and in panel previews and tunnel exports (#6784) @Pejman-Yousefi-Official
+Hosts can be reordered by drag-and-drop, and an opt-in setting makes every subscription format follow the Hosts page order across inbounds (#6895) @HamedSanaei
+Share links carry TLS cipher suites as the cs parameter, and both link importers read it back (#6825) @rqzbeh
+The cipher suite picker offers client cipher presets and warns when suites are set under a uTLS fingerprint that ignores them. The mask editors offer two chained tlshello fragment presets (f9926947, 7f82daa4)
+A helper builds the dynamic echConfigList form (domain + DoH resolver) and warns that locally generated ECH keys do not work behind a CDN (#6869) @55575455
+The host "Mihomo X25519" switch now drops ML-KEM from REALITY proxies for networks whose DPI blackholes ML-KEM handshakes (#6803) @Toximiner
+Shadowsocks inbounds with a TCP HTTP header now appear in Clash/Mihomo subscriptions through the obfs plugin (#6838) @EmmaHermione
+A new opt-in switch also takes the dns and sniffer blocks from remote Clash rule templates (#6868) @yelloduxx
+A failed-check threshold for node.down alerts stops flaky nodes from flooding Telegram, email and Discord with down/up pairs (#6768) @STRENCH0
+A new node-admin API token scope lets a master update a node's panel without handing out a full admin token (#6666) @libmur-dev
+GET /panel/api/clients/get/subId/:subId returns the full client records for an exact subscription ID (0516a1f8)
+The mask editors gain the finalmask source-IP filter, a Lua script field for noise masks, and the full XDNS DoH resolver options (61b129d5)
+Slovak (sk-SK) panel and bot locale (#6889) @Vaso73
+⚡ Improved
+Xray-core updated to v26.10.21; the pulled v26.10.10 binary pins are replaced (61b129d5)
+Go 1.27.3 with current Go, frontend and docs dependencies (775b2b0b, 57fd6179)
+Subscription fetches reuse each inbound's cached settings without its clients array: 2.1 ms instead of 72.5 ms on SQLite at 100k clients (#6758) @amirim1
+Embedded AmneziaWG uploads are no longer window-bound on real-world RTT: about 500 Mbit/s instead of 308 Mbit/s at 50 ms (96069e93)
+Fewer redundant database reads and writes for client IPs, global traffic totals and inbound stats enrichment on every cycle (#6929, #6930, #6931) @HamedSanaei
+Bearer-token requests, node sync included, use one indexed lookup instead of scanning every token (#6915) @muditagrawal2007
+The panel keeps one pooled gRPC connection to its local Xray, so bulk client operations no longer pay a handshake each (#6916) @muditagrawal2007
+The router, sidebar, page titles and command palette read the panel's pages from one manifest, so no page can go missing from one of them (#6922) @muditagrawal2007
+CI now runs the Postgres suites that never ran and lints workflows and shipped shell scripts (#6917) @muditagrawal2007
+The Telegram bot settings use the Telegram icon in the sidebar and command palette (#6848) @rashid-yusubov
+🐞 Fixed
+Xray & inbounds
+
+Enabling PROXY protocol on a fallback target behind a VLESS/Trojan TLS inbound no longer breaks the fallback; the master now sends the header the child expects (#6880) @mvanhorn
+A private DoH server is reachable again: the DNS allow rule now opens the port Xray actually dials (#6918) @jayhemnani9910
+User routing rules now match TUIC traffic, and adding or removing a TUIC client no longer restarts Xray (#6875) @poise52
+The inbound Advanced JSON editor keeps your formatting and caret instead of reformatting on every keystroke (#6857) @HamedSanaei
+AmneziaWG's fallback egress port can no longer land on the Xray API or a relay port (d103c0c0)
+Traffic & limits
+
+Periodic resets and Reset All Client Traffic now switch quota-disabled clients and inbounds back on, instead of leaving them at zero usage but offline (#6833, #6834) @jayhemnani9910
+Client IPs are recorded and shown again with fail2ban disabled; only enforcement needs it (#6830) @yudongyouqing
+Deleting an inbound or purging depleted clients no longer deadlocks the traffic poll on PostgreSQL, and a delete can no longer be undone by a concurrent edit (#6912) @muditagrawal2007
+Nodes
+
+A client is no longer stuck disabled on a node, flipping on every master tick, when the master's own limits still allow it (#6876) @muditagrawal2007
+A client re-created on a node inbound right after deletion is no longer hard-deleted 15 minutes later as a sync orphan (47be0635)
+Subscriptions & hosts
+
+Links that carry cipher suites with a blank fingerprint now pin fp=unsafe, so the suites actually take effect (c3d4a153)
+Editing an inbound's external proxy now updates its imported hosts, so subscriptions stop handing out the old address (#6831) @FZ1010
+Every subscription route sends Cache-Control: no-store, so caches in front of the sub server cannot serve stale traffic or routing data (#6862) @yukh975
+The XHTTP XMUX counts, such as the default maxConnections: 3, now reach Clash/Mihomo subscriptions (#6843) @PosvdM
+Monitoring
+
+Overview refreshes the server's public IPv4/IPv6 every five minutes instead of keeping the first lookup, or N/A, until a restart (#6933) @Vaso73
+In LXC containers, CPU, swap and uptime come from the container instead of the host, and a value that cannot be measured shows as a dash instead of 0 (#6920) @Vaso73
+Bots
+
+Bot usage commands and the hourly report look up a Telegram account's clients through the indexed client table, ending high PostgreSQL CPU on large installs (#6887) @HamedSanaei
+Panel & API
+
+Link and Telegram requests that arrive during start-up no longer fail with "sub link provider not registered" (#6914) @muditagrawal2007
+Clean systemd stops and restarts no longer log false shutdown errors (#6884) @rqzbeh
+Requests rejected for a missing or wrong CSRF token are now logged with the method, path and trusted client address (#6692) @ericanannn-blip
+Outbound TCP probes dial unbracketed IPv6 servers correctly instead of reporting them unreachable (#6850) @HamedSanaei
+The panel works with screen readers, including tab names on phone-width screens (#6907) @alireza0
+The Russian dashboard download label reads as a noun instead of a button (#6890) @almirus
+Docker
+
+The linux/386, linux/arm/v6 and linux/arm/v7 images ship the matching Xray and MTProto binaries under the names the panel looks for. An unknown architecture now fails the build instead of packaging amd64 (4d6db99b)
+

@@ -1,0 +1,76 @@
+{
+  "repositories": [
+    {
+      "name": "xray-core",
+      "url": "https://github.com/XTLS/Xray-core.git"
+    },
+    {
+      "name": "passwall2",
+      "url": "https://github.com/Openwrt-Passwall/openwrt-passwall2.git"
+    },
+    {
+      "name": "sing-box",
+      "url": "https://github.com/SagerNet/sing-box.git"
+    },
+    {
+      "name": "luci",
+      "url": "https://github.com/openwrt/luci.git"
+    },
+    {
+      "name": "packages",
+      "url": "https://github.com/openwrt/packages.git"
+    },
+    {
+      "name": "3x-ui",
+      "url": "https://github.com/MHSanaei/3x-ui.git"
+    },
+    {
+      "name": "ubuntu-server-documentation",
+      "url": "https://github.com/canonical/ubuntu-server-documentation.git"
+    },
+    {
+      "name": "systemd",
+      "url": "https://github.com/systemd/systemd.git"
+    },
+    {
+      "name": "coreutils",
+      "url": "https://github.com/coreutils/coreutils.git"
+    },
+    {
+      "name": "man-pages",
+      "url": "https://github.com/mkerrisk/man-pages.git"
+    },
+    {
+      "name": "JavaScript.info",
+      "url": "https://github.com/javascript-tutorial/en.javascript.info.git"
+    },
+    {
+      "name": "mdn-content",
+      "url": "https://github.com/mdn/content.git"
+    },
+    {
+      "name": "Flask",
+      "url": "https://github.com/pallets/flask.git"
+    },
+    {
+      "name": "SQLite",
+      "url": "https://github.com/sqlite/sqlite.git"
+    },
+    {
+      "name": "Caddy",
+      "url": "https://github.com/caddyserver/caddy.git"
+    },
+    {
+      "name": "caddy-docs",
+      "url": "https://github.com/caddyserver/website.git"
+    },
+    {
+      "name": "Playwright",
+      "url": "https://github.com/microsoft/playwright.git"
+    },
+    {
+      "name": "html5-boilerplate",
+      "url": "https://github.com/h5bp/html5-boilerplate.git"
+    }
+  ]
+}

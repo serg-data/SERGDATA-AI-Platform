@@ -1,0 +1,132 @@
+﻿
+$ErrorActionPreference = "Stop"
+
+$Base = "F:\AI-Knowledge"
+$Code = Join-Path $Base "code"
+$Python = "C:\Users\user\AppData\Local\Programs\Python\Python312\python.exe"
+$Indexer = Join-Path $Base "kb.py"
+$RepoList = Join-Path $Base "repositories.json"
+$Log = Join-Path $Base "update-knowledge.log"
+
+Set-Location $Base
+Start-Transcript -Path $Log -Append
+
+function Update-Repo {
+    param(
+        [string]$Name,
+        [string]$Url
+    )
+
+    # Имя должно обозначать только одну папку.
+    if (
+        [string]::IsNullOrWhiteSpace($Name) -or
+        $Name -notmatch '^[a-zA-Z0-9._-]+$' -or
+        $Name -eq "." -or
+        $Name -eq ".."
+    ) {
+        throw "Недопустимое имя репозитория: $Name"
+    }
+
+    if ($Url -notmatch '^https://github\.com/[^/]+/[^/]+(?:\.git)?/?$') {
+        throw "Недопустимый URL GitHub для ${Name}: $Url"
+    }
+
+    $Path = Join-Path $Code $Name
+
+    Write-Host "`n========== $Name ==========" -ForegroundColor Cyan
+
+    if (Test-Path (Join-Path $Path ".git")) {
+        Write-Host "Обновление существующего репозитория..."
+
+        git -C $Path pull --ff-only
+        if ($LASTEXITCODE -ne 0) {
+            throw "Не удалось обновить $Name. Проверь локальные изменения и Git."
+        }
+    }
+    elseif (Test-Path $Path) {
+        throw "Папка $Path существует, но не является Git-репозиторием."
+    }
+    else {
+        Write-Host "Первичное скачивание..."
+
+        git clone --depth 1 $Url $Path
+        if ($LASTEXITCODE -ne 0) {
+            throw "Не удалось скачать $Name."
+        }
+    }
+
+    Write-Host "${Name}: готово" -ForegroundColor Green
+}
+
+$ExitCode = 0
+
+try {
+    if (!(Test-Path $Python)) {
+        throw "Не найден Python: $Python"
+    }
+
+    if (!(Test-Path $Indexer)) {
+        throw "Не найден индексатор: $Indexer"
+    }
+
+    if (!(Test-Path $Code)) {
+        throw "Не найдена папка: $Code"
+    }
+
+    if (!(Test-Path $RepoList)) {
+        throw "Не найден список репозиториев: $RepoList"
+    }
+
+    if (!(Get-Command git -ErrorAction SilentlyContinue)) {
+        throw "Git не найден. Проверь установку Git и PATH."
+    }
+
+    $Config = Get-Content -LiteralPath $RepoList -Raw |
+        ConvertFrom-Json
+
+    if ($null -eq $Config.repositories -or $Config.repositories.Count -eq 0) {
+        throw "В repositories.json нет репозиториев."
+    }
+
+    $Names = @{}
+
+    foreach ($Repo in $Config.repositories) {
+        if (
+            $null -eq $Repo.name -or
+            $null -eq $Repo.url
+        ) {
+            throw "У каждой записи должны быть поля name и url."
+        }
+
+        $Key = ([string]$Repo.name).ToLowerInvariant()
+
+        if ($Names.ContainsKey($Key)) {
+            throw "Повторяется имя репозитория: $($Repo.name)"
+        }
+
+        $Names[$Key] = $true
+
+        Update-Repo -Name ([string]$Repo.name) -Url ([string]$Repo.url)
+    }
+
+    Write-Host "`n========== ПЕРЕИНДЕКСАЦИЯ ==========" -ForegroundColor Cyan
+
+    & $Python $Indexer index
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Индексатор завершился с ошибкой."
+    }
+
+    Write-Host "`nОБНОВЛЕНИЕ И ИНДЕКСАЦИЯ ЗАВЕРШЕНЫ." -ForegroundColor Green
+}
+catch {
+    $ExitCode = 1
+    Write-Host "`nОШИБКА: $_" -ForegroundColor Red
+}
+finally {
+    Stop-Transcript
+    Write-Host "`nПодробный журнал: $Log"
+    Read-Host "Нажми Enter для завершения"
+}
+
+exit $ExitCode

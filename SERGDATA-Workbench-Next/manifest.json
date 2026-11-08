@@ -1,0 +1,18 @@
+{
+  "source_archive": "SERGDATA-Workbench-Next-Approval-Resume-Final-20261106-TopMore-Fix(1).zip",
+  "changed_files": [
+    "workbench/agent.py",
+    "workbench/tool_call_adapter.py",
+    "tests/test_tool_call_adapter.py"
+  ],
+  "tests": {
+    "compileall": "passed",
+    "adapter": "9 passed",
+    "full_suite": "222 passed"
+  },
+  "baseline_sha256": {
+    "workbench/agent.py": "652e26d2ec02de5ba9e9c544fd3a109e027ef06e160227c9c1144f277554b9a2",
+    "workbench/tool_call_adapter.py": "f6cc4f69605258a643890ae96b98919c667bdc00372f10272a32da959d76ccb9",
+    "tests/test_tool_call_adapter.py": "7591e16ac5bcd310e3ccfea6c4f04ade943b5ab683b1072c16c221e19b3276e9"
+  }
+}

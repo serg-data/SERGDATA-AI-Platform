@@ -1,0 +1,74 @@
+SERGDATA Workbench — исправление подсветки через DOM API
+Дата сборки: 2026-11-06
+
+ЧТО ИСПРАВЛЕНО
+---------------
+1. Подсветка fenced code blocks больше не генерирует HTML <span> строками.
+   Исходный код помещается в <code> как обычный экранированный текст.
+   После вставки Markdown в DOM подсветка создаёт span через
+   document.createElement(), className и textContent.
+2. Кнопка «Копировать» берёт исходный текст из WeakMap, а не из
+   innerText визуально подсвеченного DOM.
+3. Просмотрщик файлов строит строки и токены через DOM API, без
+   интерполяции подсвеченного HTML в innerHTML.
+4. Добавлен маркер версии:
+   window.SERGDATA_CODE_RENDER_VERSION = '20261106-dom-tokens-v1'
+5. Изменён cache-busting URL app.js в static/index.html.
+
+УСТАНОВКА
+---------
+1. Остановить SERGDATA Workbench.
+2. Сделать резервные копии:
+   F:\SERGDATA-Workbench-Next\static\app.js
+   F:\SERGDATA-Workbench-Next\static\index.html
+3. Распаковать ZIP в корень F:\SERGDATA-Workbench-Next с заменой файлов.
+   В архиве пути уже начинаются с static/ и tests/.
+4. Запустить Workbench.
+5. В браузере выполнить Ctrl+F5.
+6. Проверить, что новая версия JavaScript загружена:
+   - открыть DevTools (F12), вкладка Console;
+   - выполнить: SERGDATA_CODE_RENDER_VERSION
+   - ожидаемый результат: "20261106-dom-tokens-v1".
+
+ПРИЁМОЧНАЯ ПРОВЕРКА
+-------------------
+Отправить модели:
+
+Выведи отдельным блоком sh следующий код без изменений:
+TCP_FALLBACK_HOST="premium-ru.geodema.network"
+TCP_FALLBACK_PORT="443"
+RESTART_COOLDOWN=120
+# Минимум 2 минуты между перезапусками
+curl --interface "$CHECK_INTERFACE" -k -I \\
+    --connect-timeout 3 \\
+    https://example.com
+
+Проверить:
+- нет видимых class="tok-string"> и class="tok-comment">;
+- строки/комментарии имеют цветовую подсветку;
+- кнопка внутри тёмного блока копирует чистый исходный текст;
+- копирование всего сообщения также остаётся чистым.
+
+Для ручной проверки копирования вставить результат кнопки в Блокнот.
+
+ОТКАТ
+-----
+1. Остановить Workbench.
+2. Вернуть сохранённые копии static/app.js и static/index.html.
+3. Запустить Workbench и выполнить Ctrl+F5.
+
+ОБЛАСТЬ ИЗМЕНЕНИЙ
+-----------------
+Изменены только:
+- static/app.js
+- static/index.html
+- тесты подсветки и cache-busting.
+
+Не изменялись main.py, workbench/agent.py, workbench/tools.py,
+Approval Queue, механизм выполнения команд, .env, БД, Git и SSH-профили.
+
+ПРИМЕЧАНИЕ
+----------
+Патч касается рендеринга и копирования кода. Повторяющаяся остановка
+агентского цикла без финального ответа — отдельная проблема и этим
+патчем не исправляется.

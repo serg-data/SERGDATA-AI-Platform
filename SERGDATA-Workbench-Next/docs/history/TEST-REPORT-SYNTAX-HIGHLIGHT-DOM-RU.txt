@@ -1,0 +1,26 @@
+SERGDATA Workbench — отчёт проверки DOM-подсветки
+Дата: 2026-11-06
+
+Базовый архив: SERGDATA-Workbench-Next(20261106-202103).zip
+Работа выполнена в изолированной копии.
+
+РЕЗУЛЬТАТЫ
+----------
+Полный pytest: 228 passed
+Node.js syntax check (node --check static/app.js): passed
+Python compileall (workbench, main.py, tests): passed
+Chromium DOM integration test: passed
+
+Браузерный тест проверяет SH/Bash, Python, JSON, JavaScript и PowerShell.
+Для каждого блока сравниваются innerText, textContent и значение,
+передаваемое кнопкой копирования. Дополнительно проверяются наличие
+токенов подсветки и отсутствие утечки атрибутов class="tok-*" в текст.
+Также проверяются специальные символы <, >, &, кавычки и последовательность
+</script> как обычное содержимое исходного кода.
+
+ОГРАНИЧЕНИЕ
+-----------
+Проверка сделана на выделенном Chromium DOM harness с функциями из
+фактического static/app.js. Живой пользовательский браузер и LM Studio
+не запускались. После установки требуется контрольная проверка в браузере
+пользователя с подтверждением runtime marker.

@@ -1,0 +1,20 @@
+{
+  "artifact": "SERGDATA Workbench corrected build",
+  "build_date": "2026-11-06",
+  "source_archive": "SERGDATA-Workbench-Next(20261106-052326).zip plus Startup-Fix package",
+  "tests": "219 passed",
+  "compileall": "passed",
+  "node_check": "passed",
+  "excluded": [
+    ".env",
+    ".workbench",
+    ".git",
+    ".pytest_cache",
+    "__pycache__",
+    "SQLite/DB files",
+    "DPAPI credentials",
+    "private keys",
+    "temporary artifacts"
+  ],
+  "frontend_patch": "Top More menu dismissal; see FIX-TOP-MORE-DISMISSAL-20261106-RU.md"
+}

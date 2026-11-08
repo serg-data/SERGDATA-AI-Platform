@@ -1,0 +1,3 @@
+[33m36752bf[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;33mtag: [m[1;33m26.10.29-1[m[33m)[m luci: bump 26.10.29
+ luci-app-passwall2/Makefile | 2 [32m+[m[31m-[m
+ 1 file changed, 1 insertion(+), 1 deletion(-)

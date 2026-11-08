@@ -1,0 +1,42 @@
+{
+  "patch": "SERGDATA Workbench — Chat 502 and Syntax Cache Fix",
+  "version": "20261106-chat-refresh-highlight3",
+  "files": {
+    "main.py": {
+      "size": 77359,
+      "sha256": "1306b8fe74162f16d4846e62aa8789ad0fec2adb7f55b116e0336aaa267e63dc"
+    },
+    "static/app.js": {
+      "size": 112629,
+      "sha256": "d759d53d6497fc49d9c125d7e6f6381af57b5c3f0b0be5bd3d86d6c4afdec25d"
+    },
+    "static/index.html": {
+      "size": 25504,
+      "sha256": "dbda24199d1a3693bfc163891daf7928a050c96cbbd594fa2f474cfe0f0772b6"
+    },
+    "tests/test_chat_rendering_regressions.py": {
+      "size": 6620,
+      "sha256": "bb5f5cefb25adab762c21cac42cec246bd4a0cd41a494a4248f091399ff65db0"
+    },
+    "tests/test_chat_cancel.py": {
+      "size": 2338,
+      "sha256": "f933ddb31b33d8ed01efaa56502d5f2c0b6a46b29a9f5850fd1ac92c9c128e8d"
+    },
+    "tests/test_approval_queue_reconciliation.py": {
+      "size": 3108,
+      "sha256": "0b30892e5b3b04023372db0f2e512bc26bfa0481765ff14d5747bf55edb6c6a0"
+    },
+    "tests/test_top_more_menu_dismissal.py": {
+      "size": 916,
+      "sha256": "1a2e4d659cda51e89294c009732a555f00a437f770cad01e78a81748339da2ea"
+    },
+    "PATCH-CHAT-502-AND-HIGHLIGHT-CACHE-RU.md": {
+      "size": 3782,
+      "sha256": "2c83501f54a664b5ac1e4d2c0378c316c1fcf74774fa744352ac6aea4ba748db"
+    },
+    "TEST-REPORT-CHAT-502-HIGHLIGHT-RU.md": {
+      "size": 3092,
+      "sha256": "3616f9ce9d1f9ffe8d19dd5209b111b21c17838e1f387154d053be72a3f83656"
+    }
+  }
+}

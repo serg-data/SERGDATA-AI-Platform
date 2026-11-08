@@ -1,0 +1,20 @@
+{
+  "name": "SERGDATA Workbench optional AI-Knowledge controls",
+  "baseline": "SERGDATA-Workbench-Next(20261107-125455).zip",
+  "changed_files": [
+    "main.py",
+    "static/index.html",
+    "static/app.js",
+    "static/style.css"
+  ],
+  "scope": "Adds a menu entry and a small dialog for checking the configured AI-Knowledge path and launching existing kb.py indexer for one file/folder.",
+  "safety": [
+    "Does not modify .env, .workbench, databases, credentials, Git metadata, or AI-Knowledge source files.",
+    "Indexing accepts only existing files/folders within configured KB_CWD.",
+    "Uses existing kb.py --no-release-sync --path; MCP connection and agent tool contracts remain unchanged."
+  ],
+  "checks": {
+    "python_compileall": true,
+    "javascript_node_check": true
+  }
+}

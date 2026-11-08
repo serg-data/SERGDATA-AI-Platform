@@ -1,0 +1,30 @@
+{
+  "name": "SERGDATA Workbench DOM Syntax Highlight Fix",
+  "date": "2026-11-06",
+  "base_archive": "SERGDATA-Workbench-Next(20261106-202103).zip",
+  "scope": [
+    "static/app.js",
+    "static/index.html",
+    "tests/test_chat_rendering_regressions.py",
+    "tests/test_highlight_dom_browser.py",
+    "tests/test_top_more_menu_dismissal.py"
+  ],
+  "excluded": [
+    ".env",
+    ".workbench",
+    ".git",
+    "database files",
+    "main.py",
+    "workbench/agent.py",
+    "workbench/tools.py",
+    "Approval Queue backend"
+  ],
+  "validation": {
+    "pytest": "228 passed",
+    "node_check": "passed",
+    "compileall": "passed",
+    "chromium_dom_test": "passed"
+  },
+  "runtime_marker": "20261106-dom-tokens-v1",
+  "live_lm_studio_tested": false
+}

@@ -1,0 +1,4 @@
+# Required for extracting the existing text layer from PDF files.
+# OCR is intentionally disabled.
+pypdf>=5.0,<7
+PyMuPDF
