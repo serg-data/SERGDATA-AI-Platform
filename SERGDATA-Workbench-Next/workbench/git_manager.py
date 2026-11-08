@@ -99,14 +99,31 @@ class GitManager:
         return {"ok": True, "message": f"Добавлено в индекс: {len(clean)}"}
 
     def unstage(self, paths: list[str]) -> dict:
-        if not self.is_repo(): raise ValueError("Git-репозиторий не инициализирован")
-        if not paths or len(paths) > 100: raise ValueError("Выбери от 1 до 100 файлов")
-        for item in paths:
-            rel=Path(str(item).replace("\\\\", "/"))
-            if rel.is_absolute() or ".." in rel.parts: raise ValueError("Недопустимый путь")
-        self._run("restore", "--staged", "--", *[str(x) for x in paths])
-        return {"ok": True, "message": "Индекс обновлён"}
+        """Unstage selected paths while preserving every working-tree file."""
+        if not self.is_repo():
+            raise ValueError("Git-репозиторий не инициализирован")
+        if not paths or len(paths) > 100:
+            raise ValueError("Выбери от 1 до 100 файлов")
 
+        clean = []
+        for item in paths:
+            rel = Path(str(item).replace("\\", "/"))
+            if rel.is_absolute() or ".." in rel.parts:
+                raise ValueError("Недопустимый путь")
+            clean.append(rel.as_posix())
+
+        # restore --staged needs HEAD; a newly initialized repository has none.
+        head = subprocess.run(
+            ["git", "rev-parse", "--verify", "HEAD"], cwd=self.root,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=10, shell=False,
+        )
+        if head.returncode == 0:
+            self._run("restore", "--staged", "--", *clean)
+        else:
+            # --cached changes only the index, never removes working files.
+            self._run("rm", "--cached", "-f", "--ignore-unmatch", "--", *clean)
+        return {"ok": True, "message": "Индекс обновлён; файлы на диске сохранены"}
     def commit(self, message: str) -> dict:
         if not self.is_repo(): raise ValueError("Git-репозиторий не инициализирован")
         message=str(message or "").strip()
@@ -260,10 +277,37 @@ class GitManager:
             raise
 
     def sync(self, action: str) -> dict:
-        if not self.is_repo(): raise ValueError("Git-репозиторий не инициализирован")
-        if action not in {"fetch","pull","push"}: raise ValueError("Недопустимая операция")
-        if action in {"pull","push"}:
-            check=subprocess.run(["git","status","--porcelain"],cwd=self.root,capture_output=True,text=True,timeout=15,shell=False)
-            if check.returncode or check.stdout.strip(): raise ValueError("Сначала разберись с локальными изменениями. Pull/Push заблокирован.")
-        out=self._run(action, timeout=180)
+        if not self.is_repo():
+            raise ValueError("Git-репозиторий не инициализирован")
+        if action not in {"fetch", "pull", "push"}:
+            raise ValueError("Недопустимая операция")
+        if action in {"pull", "push"}:
+            check = subprocess.run(
+                ["git", "status", "--porcelain"], cwd=self.root,
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=15, shell=False,
+            )
+            if check.returncode or check.stdout.strip():
+                raise ValueError("Сначала разберись с локальными изменениями. Pull/Push заблокирован.")
+
+        if action == "push":
+            upstream = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+                cwd=self.root, capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=10, shell=False,
+            )
+            if upstream.returncode != 0:
+                remotes = self._run("remote").splitlines()
+                if "origin" not in remotes:
+                    raise ValueError(
+                        "Для первой отправки настрой Remote с именем origin. "
+                        "Локальные коммиты сохранены; Push не выполнен."
+                    )
+                branch = self._run("branch", "--show-current")
+                if not branch:
+                    raise ValueError("Нельзя выполнить первую отправку из detached HEAD")
+                out = self._run("push", "--set-upstream", "origin", "HEAD", timeout=180)
+                return {"ok": True, "message": out or f"Ветка {branch} отправлена в origin и привязана к upstream"}
+
+        out = self._run(action, timeout=180)
         return {"ok": True, "message": out or f"{action} выполнен"}

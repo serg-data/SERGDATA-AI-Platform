@@ -65,3 +65,74 @@ def test_git_doctor_does_not_modify_worktree(tmp_path):
     before = (tmp_path / "tracked.txt").read_bytes()
     GitManager(tmp_path).doctor()
     assert (tmp_path / "tracked.txt").read_bytes() == before
+
+
+def configure_identity(root):
+    git(root, "config", "user.name", "Test")
+    git(root, "config", "user.email", "test@example.invalid")
+
+
+def test_unstage_before_first_commit_preserves_working_file(tmp_path):
+    git(tmp_path, "init", "-b", "main")
+    file_path = tmp_path / "new.txt"
+    file_path.write_text("important content\n", encoding="utf-8")
+    gm = GitManager(tmp_path)
+    gm.stage(["new.txt"])
+
+    result = gm.unstage(["new.txt"])
+
+    assert result["ok"] is True
+    assert file_path.read_text(encoding="utf-8") == "important content\n"
+    assert git(tmp_path, "status", "--porcelain").stdout.strip() == "?? new.txt"
+
+
+def test_unstage_after_first_commit_keeps_file_and_moves_change_to_worktree(tmp_path):
+    git(tmp_path, "init", "-b", "main")
+    configure_identity(tmp_path)
+    file_path = tmp_path / "tracked.txt"
+    file_path.write_text("before\n", encoding="utf-8")
+    git(tmp_path, "add", "tracked.txt")
+    git(tmp_path, "commit", "-m", "initial")
+    file_path.write_text("after\n", encoding="utf-8")
+    gm = GitManager(tmp_path)
+    gm.stage(["tracked.txt"])
+
+    gm.unstage(["tracked.txt"])
+
+    assert file_path.read_text(encoding="utf-8") == "after\n"
+    assert git(tmp_path, "status", "--porcelain").stdout.strip() == "M tracked.txt"
+
+
+def test_first_push_sets_upstream_to_origin(tmp_path):
+    remote = tmp_path / "remote.git"
+    work = tmp_path / "work"
+    remote.mkdir()
+    work.mkdir()
+    git(remote, "init", "--bare", "-b", "main")
+    git(work, "init", "-b", "main")
+    configure_identity(work)
+    (work / "tracked.txt").write_text("ready\n", encoding="utf-8")
+    git(work, "add", "tracked.txt")
+    git(work, "commit", "-m", "initial")
+    git(work, "remote", "add", "origin", str(remote))
+
+    result = GitManager(work).sync("push")
+
+    assert result["ok"] is True
+    upstream = git(work, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
+    assert upstream.stdout.strip() == "origin/main"
+    assert git(remote, "rev-parse", "refs/heads/main").stdout.strip() == git(work, "rev-parse", "HEAD").stdout.strip()
+
+
+def test_first_push_without_origin_fails_without_changing_commit(tmp_path):
+    git(tmp_path, "init", "-b", "main")
+    configure_identity(tmp_path)
+    (tmp_path / "tracked.txt").write_text("ready\n", encoding="utf-8")
+    git(tmp_path, "add", "tracked.txt")
+    git(tmp_path, "commit", "-m", "initial")
+    before = git(tmp_path, "rev-parse", "HEAD").stdout.strip()
+
+    with pytest.raises(ValueError, match="origin"):
+        GitManager(tmp_path).sync("push")
+
+    assert git(tmp_path, "rev-parse", "HEAD").stdout.strip() == before
