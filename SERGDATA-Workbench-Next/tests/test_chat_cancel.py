@@ -49,3 +49,20 @@ def test_frontend_restores_stop_button_from_server_state():
     assert "await syncChatStatus(activeBranch)" in source
     assert "if(stillActive){" in source and "preserveActive=true" in source
     assert "setChatUiActive(true,branch)" in source
+
+
+def test_cancel_persists_checkpoint_from_committed_tool_events():
+    source = (ROOT / "main.py").read_text(encoding="utf-8")
+    cancel = source[source.index("@app.post('/api/chat/cancel')") - 12000:source.index("@app.get('/api/chat/status')")]
+    assert "store.save_execution_checkpoint(" in cancel
+    assert "reason='user_cancel'" in cancel
+    assert "store.checkpoint_tool_events(data.branch_id, 12)" in cancel
+    assert "checkpoint_saved" in cancel
+
+
+def test_agent_exposes_model_checkpoint_tool_and_resume_prompt():
+    source = (ROOT / "workbench" / "agent.py").read_text(encoding="utf-8")
+    assert '"checkpoint_execution"' in source
+    assert 'state="paused"' in source
+    assert "get_latest_execution_checkpoint" in source
+    assert "project_identity_matches" in source

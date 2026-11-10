@@ -113,6 +113,8 @@ class Store:
             CREATE TABLE IF NOT EXISTS project_memory(project_id INTEGER PRIMARY KEY,summary TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL,FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE);
             CREATE TABLE IF NOT EXISTS project_settings(project_id INTEGER PRIMARY KEY, autonomy TEXT NOT NULL DEFAULT 'analysis', updated_at TEXT NOT NULL, FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE);
             CREATE TABLE IF NOT EXISTS branch_memory(branch_id INTEGER PRIMARY KEY,summary TEXT NOT NULL,through_message_id INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL,FOREIGN KEY(branch_id) REFERENCES branches(id) ON DELETE CASCADE);
+            CREATE TABLE IF NOT EXISTS execution_checkpoints(id INTEGER PRIMARY KEY AUTOINCREMENT,branch_id INTEGER NOT NULL,status TEXT NOT NULL CHECK(status IN ('active','paused','completed','failed','superseded')),reason TEXT NOT NULL,payload_json TEXT NOT NULL,source_message_id INTEGER,sequence INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,FOREIGN KEY(branch_id) REFERENCES branches(id) ON DELETE CASCADE,FOREIGN KEY(source_message_id) REFERENCES messages(id) ON DELETE SET NULL);
+            CREATE INDEX IF NOT EXISTS idx_execution_checkpoints_branch ON execution_checkpoints(branch_id,id DESC);
             CREATE TABLE IF NOT EXISTS migration_state(key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL,updated_at TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS attachments(
@@ -182,6 +184,10 @@ class Store:
             usage_columns = {row[1] for row in c.execute('PRAGMA table_info(usage)').fetchall()}
             if 'turn_message_id' not in usage_columns:
                 c.execute('ALTER TABLE usage ADD COLUMN turn_message_id INTEGER')
+            branch_memory_columns = {row[1] for row in c.execute('PRAGMA table_info(branch_memory)').fetchall()}
+            if 'created_at' not in branch_memory_columns:
+                c.execute('ALTER TABLE branch_memory ADD COLUMN created_at TEXT')
+                c.execute('UPDATE branch_memory SET created_at=updated_at WHERE created_at IS NULL OR created_at=\'\'')
     def import_legacy_once(self, old):
         """Import MVP data only once; never resurrect user-deleted tasks on later startups."""
         with self.conn() as c:
@@ -233,6 +239,7 @@ class Store:
             'max_tool_calls': 24,
             'temperature': 0.2,
             'request_timeout': 180,
+            'summary_message_max_chars': 15000,
             'default_project_id': None,
         }
         with self.conn() as c:
@@ -246,7 +253,7 @@ class Store:
         return values
 
     def set_app_settings(self, values):
-        allowed = {'context_limit','max_tool_rounds','max_tool_calls','temperature','request_timeout','default_project_id'}
+        allowed = {'context_limit','max_tool_rounds','max_tool_calls','temperature','request_timeout','summary_message_max_chars','default_project_id'}
         if set(values) - allowed:
             raise ValueError('Переданы неизвестные настройки')
         current = self.get_app_settings()
@@ -256,6 +263,7 @@ class Store:
             'max_tool_rounds': (1, 32),
             'max_tool_calls': (1, 64),
             'request_timeout': (30, 600),
+            'summary_message_max_chars': (1000, 50000),
         }
         for key, (low, high) in limits.items():
             try: value = int(current[key])
@@ -407,9 +415,9 @@ class Store:
             src=c.execute('SELECT * FROM branches WHERE id=?',(branch_id,)).fetchone()
             if not src: raise ValueError('Ветка не найдена')
             new_id=c.execute('INSERT INTO branches(task_id,name,parent_branch_id,fork_message_id,created_at,updated_at) VALUES(?,?,?,?,?,?)',(src['task_id'],name,branch_id,mid,n,n)).lastrowid
-            mem=c.execute('SELECT summary,through_message_id FROM branch_memory WHERE branch_id=?',(branch_id,)).fetchone()
+            mem=c.execute('SELECT summary,through_message_id,created_at FROM branch_memory WHERE branch_id=?',(branch_id,)).fetchone()
             if mem and mid and int(mem['through_message_id']) <= int(mid):
-                c.execute('INSERT INTO branch_memory(branch_id,summary,through_message_id,updated_at) VALUES(?,?,?,?)',(new_id,mem['summary'],mem['through_message_id'],n))
+                c.execute('INSERT INTO branch_memory(branch_id,summary,through_message_id,updated_at,created_at) VALUES(?,?,?,?,?)',(new_id,mem['summary'],mem['through_message_id'],n,mem['created_at'] or n))
             return new_id
     def rename_branch(self,bid,name):
         with self.conn() as c: c.execute('UPDATE branches SET name=?,updated_at=? WHERE id=?',(name,self.now(),bid))
@@ -500,6 +508,67 @@ class Store:
             c.execute('UPDATE tasks SET updated_at=? WHERE id=(SELECT task_id FROM branches WHERE id=?)',(n,bid))
             if prompt or completion: c.execute('INSERT INTO usage(branch_id,model,prompt_tokens,completion_tokens,total_tokens,created_at,turn_message_id) VALUES(?,?,?,?,?,?,?)',(bid,'',prompt,completion,prompt+completion,n,usage_message_id))
             return mid
+    def save_execution_checkpoint(self, bid, payload, status="paused", reason="tool_event", source_message_id=None):
+        """Append an immutable checkpoint version; never overwrite prior recovery state."""
+        allowed = {"active", "paused", "completed", "failed", "superseded"}
+        if status not in allowed:
+            raise ValueError("Недопустимый статус контрольной точки")
+        if not isinstance(payload, dict):
+            raise TypeError("payload контрольной точки должен быть объектом")
+        encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        if len(encoded.encode("utf-8")) > 256_000:
+            raise ValueError("Контрольная точка превышает лимит 256 КБ")
+        now = self.now()
+        with self.conn() as c:
+            exists = c.execute("SELECT 1 FROM branches WHERE id=?", (int(bid),)).fetchone()
+            if not exists:
+                raise ValueError("Ветка для контрольной точки не найдена")
+            seq = int(c.execute("SELECT COALESCE(MAX(sequence),0)+1 FROM execution_checkpoints WHERE branch_id=?", (int(bid),)).fetchone()[0])
+            cur = c.execute("INSERT INTO execution_checkpoints(branch_id,status,reason,payload_json,source_message_id,sequence,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)", (int(bid), status, str(reason)[:80], encoded, source_message_id, seq, now, now))
+            # A new resumable checkpoint supersedes older resumable versions, preserving their history.
+            if status in {"active", "paused"}:
+                c.execute("UPDATE execution_checkpoints SET status='superseded',updated_at=? WHERE branch_id=? AND id<>? AND status IN ('active','paused')", (now, int(bid), cur.lastrowid))
+            return {"id": int(cur.lastrowid), "branch_id": int(bid), "status": status, "reason": str(reason)[:80], "sequence": seq, "created_at": now}
+
+    def get_latest_execution_checkpoint(self, bid, resumable_only=True):
+        sql = "SELECT * FROM execution_checkpoints WHERE branch_id=?"
+        params = [int(bid)]
+        if resumable_only:
+            sql += " AND status IN ('active','paused')"
+        sql += " ORDER BY id DESC LIMIT 1"
+        with self.conn() as c:
+            row = c.execute(sql, params).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        try:
+            item["payload"] = json.loads(item.pop("payload_json"))
+        except (TypeError, json.JSONDecodeError):
+            item["payload"] = {}
+            item["payload_error"] = True
+        return item
+
+    def transition_execution_checkpoint(self, checkpoint_id, status):
+        if status not in {"active", "paused", "completed", "failed", "superseded"}:
+            raise ValueError("Недопустимый статус контрольной точки")
+        with self.conn() as c:
+            cur = c.execute("UPDATE execution_checkpoints SET status=?,updated_at=? WHERE id=? AND status IN ('active','paused')", (status, self.now(), int(checkpoint_id)))
+            return cur.rowcount == 1
+
+    def checkpoint_tool_events(self, bid, limit=12):
+        rows = self.messages(bid, limit=max(1, min(100, int(limit) * 3)))
+        events = []
+        for row in rows:
+            if row.get("role") != "tool":
+                continue
+            meta = row.get("metadata") or {}
+            if isinstance(meta, str):
+                try: meta = json.loads(meta)
+                except Exception: meta = {}
+            if isinstance(meta, dict) and meta.get("name"):
+                events.append({k: meta.get(k) for k in ("name", "arguments", "status", "duration_ms", "result_preview", "tool_call_id")})
+        return events[-max(1, min(100, int(limit))):]
+
     def usage(self,bid):
         with self.conn() as c:
             rows=c.execute('SELECT COALESCE(SUM(prompt_tokens),0) p,COALESCE(SUM(completion_tokens),0) c,COALESCE(SUM(total_tokens),0) t FROM usage WHERE branch_id=?',(bid,)).fetchone()
@@ -640,11 +709,12 @@ class Store:
 
     def get_memory(self,bid):
         with self.conn() as c:
-            row=c.execute('SELECT summary,through_message_id,updated_at FROM branch_memory WHERE branch_id=?',(bid,)).fetchone()
+            row=c.execute('SELECT summary,through_message_id,created_at,updated_at FROM branch_memory WHERE branch_id=?',(bid,)).fetchone()
             return dict(row) if row else None
     def save_memory(self,bid,summary,through_message_id):
         with self.conn() as c:
-            c.execute('INSERT INTO branch_memory(branch_id,summary,through_message_id,updated_at) VALUES(?,?,?,?) ON CONFLICT(branch_id) DO UPDATE SET summary=excluded.summary,through_message_id=excluded.through_message_id,updated_at=excluded.updated_at',(bid,summary,through_message_id,self.now()))
+            now=self.now()
+            c.execute('INSERT INTO branch_memory(branch_id,summary,through_message_id,updated_at,created_at) VALUES(?,?,?,?,?) ON CONFLICT(branch_id) DO UPDATE SET summary=excluded.summary,through_message_id=excluded.through_message_id,updated_at=excluded.updated_at',(bid,summary,through_message_id,now,now))
     def add_attachment(self, *, project_id, task_id, branch_id, original_name, stored_name, media_type, kind, size, sha256, note, chunks):
         with self.conn() as c:
             aid = c.execute(

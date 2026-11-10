@@ -1,13 +1,14 @@
 from pathlib import Path
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_agent_persists_original_tool_call_context_for_approval():
     source = (ROOT / 'workbench' / 'agent.py').read_text(encoding='utf-8')
-    assert 'self.store.set_execution_context(int(queued_match.group(1)), msgs, tc.id, model, user_message_id)' in source
+    assert re.search(r'self\.store\.set_execution_context\(\s*int\(queued_match\.group\(1\)\),\s*msgs,\s*tc\.id,\s*model,\s*user_message_id\s*\)', source)
     assert 'async def resume_execution(self, execution_id: int, result_text: str):' in source
-    assert "'tool_call_id': tool_call_id" in source
+    assert re.search(r'[\"\']tool_call_id[\"\']\s*:\s*tool_call_id', source)
 
 
 def test_powershell_cannot_be_used_as_ssh_bypass():

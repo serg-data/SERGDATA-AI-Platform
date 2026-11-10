@@ -1,20 +1,36 @@
 {
-  "name": "SERGDATA Workbench optional AI-Knowledge controls",
-  "baseline": "SERGDATA-Workbench-Next(20261107-125455).zip",
-  "changed_files": [
-    "main.py",
-    "static/index.html",
-    "static/app.js",
-    "static/style.css"
-  ],
-  "scope": "Adds a menu entry and a small dialog for checking the configured AI-Knowledge path and launching existing kb.py indexer for one file/folder.",
-  "safety": [
-    "Does not modify .env, .workbench, databases, credentials, Git metadata, or AI-Knowledge source files.",
-    "Indexing accepts only existing files/folders within configured KB_CWD.",
-    "Uses existing kb.py --no-release-sync --path; MCP connection and agent tool contracts remain unchanged."
-  ],
-  "checks": {
-    "python_compileall": true,
-    "javascript_node_check": true
-  }
+  "patch": "SERGDATA Workbench Execution Continuity v1.2.1",
+  "base": "v1.2",
+  "files": [
+    {
+      "path": ".patch-backups/execution-continuity-v1.2/main.py",
+      "size": 146995,
+      "sha256": "f66cecb67c016edb58eb7c432959de2aa9130a4f43ab4550c83b3b19a3826add"
+    },
+    {
+      "path": ".patch-backups/execution-continuity-v1.2/workbench-agent.py",
+      "size": 176343,
+      "sha256": "82a98e6d4e706f1c30e9eb00e1dd6f53775fff4bfcde65cc5d37a4b8f46824f5"
+    },
+    {
+      "path": "PATCH-README-RU.md",
+      "size": 3273,
+      "sha256": "5ed7ae6356593889944efd667beadd13c5bac6ef56d8d79a7ebb3d5d7c9b89a8"
+    },
+    {
+      "path": "main.py",
+      "size": 146995,
+      "sha256": "f66cecb67c016edb58eb7c432959de2aa9130a4f43ab4550c83b3b19a3826add"
+    },
+    {
+      "path": "tests/test_checkpoint_resume_briefing_contract.py",
+      "size": 1917,
+      "sha256": "a83138e62b0a89e7b758d26108f636699dc136572aa8204465bc077d9ad472a7"
+    },
+    {
+      "path": "workbench/agent.py",
+      "size": 176343,
+      "sha256": "82a98e6d4e706f1c30e9eb00e1dd6f53775fff4bfcde65cc5d37a4b8f46824f5"
+    }
+  ]
 }

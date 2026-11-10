@@ -62,9 +62,16 @@ CHAT_TASKS={}
 CHAT_TASKS_LOCK=threading.RLock()
 CHAT_ACTIVITY={}
 CHAT_ACTIVITY_LOCK=threading.RLock()
-def set_chat_activity(branch_id, stage, detail=''):
+def set_chat_activity(branch_id, stage, detail='', context=None):
     with CHAT_ACTIVITY_LOCK:
-        CHAT_ACTIVITY[int(branch_id)]={'stage':str(stage or 'idle')[:40], 'detail':str(detail or '')[:160], 'updated_at':time.time()}
+        key = int(branch_id)
+        previous = CHAT_ACTIVITY.get(key, {})
+        CHAT_ACTIVITY[key] = {
+            'stage': str(stage or 'idle')[:40],
+            'detail': str(detail or '')[:160],
+            'updated_at': time.time(),
+            'context': dict(context) if isinstance(context, dict) else previous.get('context'),
+        }
 def get_chat_activity(branch_id):
     with CHAT_ACTIVITY_LOCK:
         return dict(CHAT_ACTIVITY.get(int(branch_id), {'stage':'idle','detail':'','updated_at':0}))
@@ -252,6 +259,7 @@ class AgentSettingsIn(BaseModel):
     max_tool_calls:int=Field(ge=1,le=64)
     temperature:float=Field(ge=0.0,le=1.0)
     request_timeout:int=Field(ge=30,le=600)
+    summary_message_max_chars:int=Field(default=15000,ge=1000,le=50000)
     default_project_id:int|None=None
 class UserInputSubmit(BaseModel):
     value:str=Field(default='',max_length=8000)
@@ -1642,7 +1650,7 @@ async def stats(bid:int):
     context_messages=agent._context_messages(active, memory['summary'] if memory else '',
                                              branch_project['root'] if branch_project else str(project.root),
                                              pm['summary'] if pm else '',
-                                             task_row['summary'] if task_row else '')
+                                             task_row['summary'] if task_row else '', memory)
     model_id=await agent.resolve_model_id()
     metrics=await asyncio.to_thread(agent.prompt_metrics,context_messages,agent.specs(),model_id)
     metadata=await agent.model_context_metadata(model_id)
@@ -1706,18 +1714,57 @@ async def chat(data:ChatIn):
         if existing and not existing.done():
             raise HTTPException(409,'Для этой ветки уже выполняется запрос модели')
         CHAT_TASKS[data.branch_id]=task
-    set_chat_activity(data.branch_id, 'preparing', 'Подготовка контекста')
+    set_chat_activity(data.branch_id, 'preparing', 'Подготовка контекста', {})
     try:
         history=store.messages(data.branch_id)
         return await agent.chat(data.branch_id,data.text,history,data.attachment_ids)
     except asyncio.CancelledError:
-        # Cancellation is an intentional user action, not an LM Studio failure.
-        # Preserve a visible marker and return a normal response to the browser.
+        checkpoint_saved = False
+        # Persist a deterministic recovery point from already committed messages/events.
+        # Never infer that an in-flight tool completed: only stored tool events are evidence.
         try:
-            store.add_message(data.branch_id,'assistant','Генерация остановлена пользователем.')
+            messages = store.messages(data.branch_id, limit=500)
+            last_user = next((m for m in reversed(messages) if m.get('role') == 'user'), None)
+            project = store.project_for_branch(data.branch_id) or {}
+            task_row = store.task_for_branch(data.branch_id) or {}
+            previous = store.get_latest_execution_checkpoint(data.branch_id, resumable_only=True)
+            previous_payload = (previous or {}).get('payload') or {}
+            payload = {
+                'version': 1,
+                'state': 'paused',
+                'summary': previous_payload.get('summary') or 'Выполнение остановлено пользователем. Состояние восстановлено по уже сохранённым сообщениям и результатам инструментов; незавершённая операция не считается выполненной.',
+                'completed_steps': previous_payload.get('completed_steps', []),
+                'findings': previous_payload.get('findings', []),
+                'next_step': previous_payload.get('next_step') or 'Проверь последний сохранённый результат и фактическое состояние возможной незавершённой операции. Затем продолжи с первого неподтверждённого шага.',
+                'constraints': previous_payload.get('constraints', []),
+                'project': {
+                    'project_id': project.get('id'), 'project_name': project.get('name'),
+                    'project_root': project.get('root'), 'task_id': task_row.get('id'),
+                    'task_title': task_row.get('title'),
+                },
+                'last_user_request': (last_user or {}).get('content', '')[:5000],
+                'recent_tool_events': store.checkpoint_tool_events(data.branch_id, 12),
+                'interrupted': True,
+                'note': 'Операция, выполнявшаяся в момент отмены, имеет неизвестный результат и требует проверки перед повтором.'
+            }
+            store.save_execution_checkpoint(
+                data.branch_id, payload, status='paused', reason='user_cancel',
+                source_message_id=(last_user or {}).get('id')
+            )
+            checkpoint_saved = True
+        except Exception:
+            # Keep cancellation responsive; a failed checkpoint must not be reported as saved.
+            logger.exception('EXECUTION_CHECKPOINT_SAVE_FAILED branch_id=%s reason=user_cancel', data.branch_id)
+        stop_message = (
+            'Генерация остановлена пользователем. Контрольная точка сохранена; незавершённое действие требует проверки.'
+            if checkpoint_saved else
+            'Генерация остановлена пользователем. Не удалось сохранить контрольную точку; используй историю ветки и проверь состояние последней операции перед продолжением.'
+        )
+        try:
+            store.add_message(data.branch_id, 'assistant', stop_message)
         except Exception:
             pass
-        return {'answer':'Генерация остановлена пользователем.','stopped':True}
+        return {'answer': stop_message, 'stopped': True, 'checkpoint_saved': checkpoint_saved}
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
@@ -1744,9 +1791,39 @@ async def chat(data:ChatIn):
         # Log the exception class, upstream status and traceback frames, but not
         # exception text or payloads which might contain prompts or credentials.
         trace_frames = ''.join(traceback.format_tb(e.__traceback__))[-5000:]
+        # Log only the upstream's structured error classification/message, never the
+        # submitted prompt, tool arguments, request headers, or complete response body.
+        upstream_error = ''
+        try:
+            parsed_body = body
+            if isinstance(parsed_body, str):
+                parsed_body = json.loads(parsed_body)
+            if isinstance(parsed_body, dict):
+                error_obj = parsed_body.get('error', parsed_body)
+                if isinstance(error_obj, dict):
+                    parts = [error_obj.get(k) for k in ('code', 'type', 'message')]
+                    upstream_error = ' | '.join(str(x) for x in parts if x)
+                elif error_obj:
+                    upstream_error = str(error_obj)
+            elif body and not isinstance(body, (bytes, bytearray)):
+                upstream_error = str(body)
+        except Exception:
+            upstream_error = ''
+        # Some OpenAI-compatible servers/SDK versions expose the useful 4xx
+        # explanation on the exception itself while response.text/body is empty.
+        # Fall back to that bounded message; never log the submitted request.
+        if not upstream_error:
+            try:
+                upstream_error = str(getattr(e, "message", None) or str(e))
+            except Exception:
+                upstream_error = type(e).__name__
+        upstream_error = re.sub(
+            r'(?i)(api[_ -]?key|token|password|passwd|secret|authorization)(\s*[:=]\s*)[^\s,;]+',
+            r'\1\2[REDACTED]', upstream_error
+        )[:800]
         logger.error(
-            'CHAT_API_FAILURE id=%s branch_id=%s exception_type=%s upstream_status=%s\n%s',
-            error_id, data.branch_id, type(e).__name__, upstream_status, trace_frames
+            'CHAT_API_FAILURE id=%s branch_id=%s exception_type=%s upstream_status=%s upstream_error=%s\n%s',
+            error_id, data.branch_id, type(e).__name__, upstream_status, upstream_error, trace_frames
         )
         low = detail.lower()
         if any(x in low for x in ('context length', 'maximum context', 'too many tokens', 'prompt is too long', 'maximum number of tokens')):

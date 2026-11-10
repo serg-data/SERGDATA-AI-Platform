@@ -1,0 +1,73 @@
+--- a/static/app.js
++++ b/static/app.js
+@@ -3,7 +3,7 @@
+ window.SERGDATA_CODE_RENDER_VERSION='20261106-dom-tokens-v1';
+ const rawCodeSources=new WeakMap();
+ let releaseCompareRows=[], releasePlanId=null, openedProjectFile='', openedProjectFileContent='', fileViewerFontSize=12, messagesLoadSeq=0;
+-let activeProject=null, activeTask=null, activeBranch=null, busy=false, activeChatBranch=null, previewTimer=null, selectedAttachments=[], baseContextEstimate=0, credentialPersistenceAvailable=false, chatBusySince=0, chatElapsedTimer=null, waitingForUserInput=false, waitingForApproval=false, chatPollTimer=null, chatPollBusy=false, executionQueuePollTimer=null, executionQueuePollBusy=false, executionQueueLastKnown=null, chatActivity={stage:'idle',detail:''};
++let activeProject=null, activeTask=null, activeBranch=null, busy=false, activeChatBranch=null, previewTimer=null, selectedAttachments=[], baseContextEstimate=0, credentialPersistenceAvailable=false, chatBusySince=0, chatElapsedTimer=null, waitingForUserInput=false, waitingForApproval=false, chatPollTimer=null, chatPollBusy=false, statsPollBusy=false, statsPollLastAt=0, statsRequestSeq=0, executionQueuePollTimer=null, executionQueuePollBusy=false, executionQueueLastKnown=null, chatActivity={stage:'idle',detail:''};
+ async function api(url,opts={}){
+  const headers={...(opts.headers||{})};
+  if(!(opts.body instanceof FormData))headers['Content-Type']=headers['Content-Type']||'application/json';
+@@ -302,8 +302,12 @@
+  catch(e){$('contextNotice').title='Не удалось оценить контекст: '+e.message;$('contextNotice').querySelector('.context-indicator-value').textContent='!';$('contextNotice').className='context-indicator level-warning'}
+ }
+ function usageKindLabel(kind){return ({chat:'Ответ модели',tool_call:'Вызов инструментов',memory_summary:'Сжатие памяти',tool_error_final:'Завершение после ошибки инструмента'})[kind]||kind||'Запрос'}
+-async function loadStats(){
+- const s=await api(`/api/branches/${activeBranch}/stats`);
++async function loadStats(branch=activeBranch){
++ if(!branch)return;
++ const requestBranch=Number(branch),requestSeq=++statsRequestSeq;
++ const s=await api(`/api/branches/${requestBranch}/stats`);
++ // Ignore late responses from a branch that is no longer selected.
++ if(requestSeq!==statsRequestSeq||Number(activeBranch)!==requestBranch)return;
+  $('statMessages').textContent=s.messages;baseContextEstimate=Number(s.estimated_context_tokens||0);$('statContext').textContent=baseContextEstimate.toLocaleString('ru-RU');
+  const usage=s.usage||{p:0,c:0,t:0},inherited=s.usage_inherited||{p:0,c:0,t:0},direct=s.usage_direct||{p:0,c:0,t:0};
+  $('tokenSpent').textContent=Number(s.context_tokens_used??s.estimated_context_tokens??0).toLocaleString('ru-RU'); $('tokenRemaining').textContent=Number(s.remaining_estimate||0).toLocaleString('ru-RU'); $('tokenMiniBar').style.width=Math.min(100,Math.max(0,Number(s.context_percent||0)))+'%'; $('tokenCompactHint').textContent=`Заполнение с резервом ${Number(s.context_percent||0)}% · API за историю ${Number(s.api_tokens_lifetime??usage.t??0).toLocaleString('ru-RU')}`;
+@@ -592,7 +596,15 @@
+   renderChatComputeButton(false);
+   // Tool events are committed before the full agent turn returns. Refresh the
+   // transcript while busy so users never need to press Stop to reveal them.
+-  if(state.active)await loadMessages();
++  if(state.active){
++   await loadMessages();
++   // Context statistics are more expensive than activity polling (the API
++   // also queries LM Studio metadata). Refresh them sparingly while active.
++   if(Date.now()-statsPollLastAt>=15000&&!statsPollBusy){
++    statsPollLastAt=Date.now();statsPollBusy=true;
++    loadStats(branch).catch(e=>console.warn('Не удалось обновить статистику контекста:',e)).finally(()=>{statsPollBusy=false});
++   }
++  }
+   else if(['waiting_input','waiting_approval'].includes(chatActivity.stage))await loadMessages();
+   else{
+    // The server may have committed the final assistant message immediately
+@@ -605,7 +617,7 @@
+ }
+ function setChatUiActive(active,branch=activeBranch){
+  const wasBusy=busy;busy=!!active;activeChatBranch=busy?Number(branch):null;
+- if(busy&&!wasBusy){chatBusySince=Date.now();if(chatElapsedTimer)clearInterval(chatElapsedTimer);chatElapsedTimer=setInterval(()=>{if(busy)renderChatComputeButton(false);else{clearInterval(chatElapsedTimer);chatElapsedTimer=null}},1000);stopChatPolling();chatPollTimer=setInterval(()=>pollChatActivity(Number(branch)),1200)}
++ if(busy&&!wasBusy){chatBusySince=Date.now();statsPollLastAt=0;if(chatElapsedTimer)clearInterval(chatElapsedTimer);chatElapsedTimer=setInterval(()=>{if(busy)renderChatComputeButton(false);else{clearInterval(chatElapsedTimer);chatElapsedTimer=null}},1000);stopChatPolling();chatPollTimer=setInterval(()=>pollChatActivity(Number(branch)),1200)}
+  if(!busy){chatBusySince=0;if(chatElapsedTimer){clearInterval(chatElapsedTimer);chatElapsedTimer=null}stopChatPolling()}
+  renderChatComputeButton(false);
+ }
+@@ -863,6 +875,20 @@
+ });
+ $('agentSettingsReset')?.addEventListener('click',()=>{fillAgentSettings(AGENT_DEFAULTS);$('agentSettingsStatus').textContent='Выбраны значения по умолчанию. Нажми «Сохранить», чтобы применить.'});
+ 
++document.addEventListener('visibilitychange',()=>{
++ if(document.visibilityState!=='visible'||!activeBranch)return;
++ const branch=Number(activeBranch);
++ // One immediate refresh on return; the in-flight guard prevents overlap.
++ if(!statsPollBusy){statsPollLastAt=Date.now();statsPollBusy=true;loadStats(branch).catch(e=>console.warn('Не удалось синхронизировать статистику контекста:',e)).finally(()=>{statsPollBusy=false})}
++ pollChatActivity(branch);
++});
++window.addEventListener('pageshow',()=>{
++ if(document.visibilityState==='visible'&&activeBranch){
++  const branch=Number(activeBranch);
++  if(!statsPollBusy){statsPollLastAt=Date.now();statsPollBusy=true;loadStats(branch).catch(e=>console.warn('Не удалось восстановить статистику контекста:',e)).finally(()=>{statsPollBusy=false})}
++  pollChatActivity(branch);
++ }
++});
+ init();
+ loadAgentSettings();
+ 

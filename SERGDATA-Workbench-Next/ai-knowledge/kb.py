@@ -84,15 +84,13 @@ def connect():
 
 
 def excluded(path):
-    """Exclude generated, backup, staging and temporary clone directories from indexing."""
+    """Exclude generated, backup and temporary directories from indexing."""
     parts = [part.casefold() for part in path.parts]
     if any(part in EXCLUDED_DIRS for part in parts):
         return True
-    # Temporary full clones created by older Git Doctor versions lived under
-    # code/ as .<repo>.reclone-<timestamp>. Never ingest their working trees.
+    # Names used by update-knowledge.ps1. Match directory components only,
+    # so ordinary source files containing these words are not excluded.
     for part in parts:
-        if ".reclone-" in part or part.startswith(".reclone-"):
-            return True
         if part.endswith("-stage") or "-stage-" in part:
             return True
         if "-before-swap-" in part or "-before-sparse-" in part:
@@ -135,72 +133,34 @@ def read_text_robust(path):
         ) from exc
 
 
-def _registered_external_source(selected_path):
-    """Return (source_id, source_root) only for a registered enabled source."""
-    import json
+def _db_path(folder, path):
+    """Return a stable, collision-free key for an indexed file.
 
-    registry_path = BASE / "sources.json"
-    if not registry_path.is_file():
-        return None
-    try:
-        data = json.loads(registry_path.read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError) as exc:
-        raise ValueError(f"Не удалось прочитать реестр внешних источников: {exc}") from exc
-    rows = data.get("sources", []) if isinstance(data, dict) else []
-    if not isinstance(rows, list):
-        raise ValueError("Реестр внешних источников повреждён: поле sources должно быть списком")
-    candidate = Path(selected_path).resolve()
-    for row in rows:
-        if not isinstance(row, dict) or row.get("enabled", True) is False:
-            continue
-        source_id = str(row.get("id", "")).strip()
-        raw_root = row.get("path")
-        if not source_id or not isinstance(raw_root, str) or not raw_root.strip():
-            continue
-        try:
-            source_root = Path(raw_root).expanduser().resolve(strict=True)
-            candidate.relative_to(source_root)
-        except (OSError, ValueError):
-            continue
-        if source_root.is_dir():
-            return source_id, source_root
-    return None
-
-
-def _index_path_key(folder, path):
-    """Stable DB key; external files are namespaced by source ID."""
+    Files inside AI-Knowledge keep their historical relative keys. Files from
+    user-selected folders outside BASE use their normalized absolute path, so
+    they can coexist in the same SQLite/FTS tables without source registration.
+    """
     path = Path(path).resolve()
-    base = BASE.resolve()
     try:
-        return path.relative_to(base).as_posix()
+        return path.relative_to(BASE.resolve()).as_posix()
     except ValueError:
-        registered = _registered_external_source(path)
-        if not registered:
-            raise ValueError(f"Внешний путь не зарегистрирован: {path}")
-        source_id, source_root = registered
-        relative = path.relative_to(source_root).as_posix()
-        if not relative or relative == ".":
-            raise ValueError("Нельзя индексировать корень внешнего источника как файл")
-        return f"@external/{source_id}/{relative}"
+        # as_posix is stable across API/SQLite display and avoids Windows\ separators.
+        return path.as_posix()
 
 
 def _iter_indexable_files(selected_path=None):
-    """Yield supported files from the project or a registered external source."""
+    """Yield supported files from any explicitly selected local file/folder.
+
+    The built-in full scan remains limited to SOURCES. An explicit --path is a
+    deliberate user action and does not require adding the folder to sources.json.
+    """
     if selected_path is not None:
         selected_path = Path(selected_path).expanduser().resolve()
         if not selected_path.exists():
             raise FileNotFoundError(f"Путь не найден: {selected_path}")
-        try:
-            selected_path.relative_to(BASE.resolve())
-        except ValueError:
-            registered = _registered_external_source(selected_path)
-            if not registered:
-                raise ValueError("Путь должен находиться внутри AI-Knowledge или зарегистрированного внешнего источника")
         if selected_path.is_file():
-            if selected_path.suffix.lower() in EXTENSIONS:
-                _index_path_key(selected_path.parent, selected_path)
-                if not excluded(Path(selected_path.name)):
-                    yield selected_path.parent, selected_path
+            if selected_path.suffix.lower() in EXTENSIONS and not excluded(Path(selected_path.name)):
+                yield selected_path.parent, selected_path
             return
         if not selected_path.is_dir():
             raise ValueError(f"Это не файл и не папка: {selected_path}")
@@ -262,7 +222,7 @@ def _show_progress(done, total, started, current="", recent_rate=None):
 
 def _prepare_file(folder, path, known_files, known_chunk_paths, force_paths=None):
     """Read and prepare one file in a worker; never touches SQLite."""
-    relpath = _index_path_key(folder, path)
+    relpath = _db_path(folder, path)
     try:
         if not path.is_file() or excluded(path.relative_to(folder)):
             return {
@@ -425,21 +385,7 @@ def _delete_indexed_paths(con, paths):
     return removed
 
 
-def _purge_temporary_clone_index_entries(con):
-    """Remove stale KB rows created by legacy .<repo>.reclone-* directories."""
-    paths = [
-        row[0]
-        for row in con.execute("SELECT path FROM files")
-        if any(".reclone-" in part.casefold() or part.casefold().startswith(".reclone-")
-               for part in Path(row[0].replace("\\\\", "/")).parts)
-    ]
-    removed = _delete_indexed_paths(con, paths)
-    if removed:
-        print(f"Удалено старых записей временных Git-клонов из индекса: {removed}")
-    return removed
-
-
-def index_files(selected_path=None, paths_manifest=None):
+def index_files(selected_path=None, paths_manifest=None, new_only=False):
     con = connect()
     updated = skipped = unchanged = done = errors = 0
     started = time.monotonic()
@@ -447,12 +393,11 @@ def index_files(selected_path=None, paths_manifest=None):
     force_paths = set()
 
     try:
-        _purge_temporary_clone_index_entries(con)
         if paths_manifest:
             if selected_path is not None:
                 raise ValueError("--paths-file нельзя совмещать с --path")
             candidates, deleted_paths = _load_paths_manifest(paths_manifest)
-            force_paths = {_index_path_key(folder, path) for folder, path in candidates}
+            force_paths = {path.relative_to(BASE).as_posix() for _folder, path in candidates}
             removed = _delete_indexed_paths(con, deleted_paths)
             print(f"Удалено записей из индекса: {removed}")
         else:
@@ -464,8 +409,7 @@ def index_files(selected_path=None, paths_manifest=None):
 
     total = len(candidates)
     if total == 0:
-        print("Нет поддерживаемых файлов для индексации в выбранном источнике.")
-        print("Проверьте, что в папке есть файлы поддерживаемых типов и у процесса есть права чтения.")
+        print("Нет файлов для индексации.")
         con.close()
         return True
 
@@ -475,6 +419,21 @@ def index_files(selected_path=None, paths_manifest=None):
     except sqlite3.Error:
         con.close()
         raise
+
+    already_indexed = 0
+    if new_only:
+        before = len(candidates)
+        candidates = [
+            (folder, path) for folder, path in candidates
+            if _db_path(folder, path) not in known_files
+        ]
+        already_indexed = before - len(candidates)
+        print(f"Режим: только новые файлы. Уже присутствуют в базе: {already_indexed}.")
+        total = len(candidates)
+        if total == 0:
+            print(f"Новых файлов нет. Существующие записи не изменены. Уже в базе: {already_indexed}.")
+            con.close()
+            return True
 
     print(f"Подготовлено файлов для проверки: {total}; рабочих потоков: {INDEX_WORKERS}; очередь задач: {MAX_PENDING_TASKS}")
     iterator = iter(candidates)
@@ -495,7 +454,7 @@ def index_files(selected_path=None, paths_manifest=None):
                 completed, _ = wait(pending, return_when=FIRST_COMPLETED)
                 for future in completed:
                     folder, path = pending.pop(future)
-                    relpath = _index_path_key(folder, path)
+                    relpath = _db_path(folder, path)
                     try:
                         item = future.result()
                         status = item["status"]
@@ -685,7 +644,12 @@ def main():
     )
     index_parser.add_argument(
         "--path",
-        help="Индексировать только указанный файл или папку внутри проекта",
+        help="Индексировать только явно выбранный файл или папку (в том числе вне проекта)",
+    )
+    index_parser.add_argument(
+        "--new-only",
+        action="store_true",
+        help="Добавить только файлы, которых ещё нет в базе; существующие записи не изменять",
     )
     index_parser.add_argument(
         "--paths-file",
@@ -763,7 +727,7 @@ def main():
                 parser.error("--paths-file нельзя совмещать с --select или --path")
             ok = index_files(paths_manifest=args.paths_file)
         else:
-            ok = index_files(selected_path)
+            ok = index_files(selected_path, new_only=args.new_only)
         if not ok:
             return 2
     elif args.command == "search":
